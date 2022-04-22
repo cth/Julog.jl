@@ -23,7 +23,8 @@ const default_funcs = Dict(op => eval(op) for op in ops)
 const logicals = Set([true, false, :and, :or, :not, :!,
                       :exists, :forall, :imply, :(=>)])
 "Built-in predicates with special handling during SLD resolution."
-const builtins = union(comp_ops, logicals,
+const probabilistic = Set([:msw])
+const builtins = union(comp_ops, logicals, probabilistic,
     Set([:is, :call, :unifies, :≐, :cut, :fail, :findall, :countall]))
 
 """
@@ -171,6 +172,20 @@ function _unify!(src::Compound, dst::Term, src_stack, dst_stack)
     return true
 end
 
+function msw(outcomes::AbstractArray{A,1},probs::AbstractArray{U, 1}) where {U <: Real,A <: Any}
+    #     return outcomes[Gen.categorical(probs)]
+    @assert length(outcomes)==length(probs)
+    p=rand()
+    acc=0
+    for i in 1:length(probs)
+        acc += probs[i]
+        if p <= acc
+            return outcomes[i]
+        end
+    end
+    return outcomes[length(outcomes)] # in case of floating point precision loss
+end
+
 "Handle built-in predicates"
 function handle_builtins!(queue, clauses, goal, term; options...)
     funcs = get(options, :funcs, Dict())
@@ -287,6 +302,30 @@ function handle_builtins!(queue, clauses, goal, term; options...)
         unifier = unify(count, Const(length(subst)), occurs_check, funcs)
         if isnothing(unifier) return false end
         compose!(goal.env, unifier) # Update variable bindings if satisfied
+        return true
+    elseif term.name == :msw
+        msw_id, msw_outcome = term.args
+        msw_id = substitute(msw_id,goal.env) # msw_id needs to be a ground term
+
+        # First see if there is a matching fact on the form:
+        # values(pattern,[outcome_1,...,outcome_n],[prob_1,...,prob_n])
+        vsat, vsubst = resolve(Term[Compound(:values,[msw_id,Var(:Vs)])], clauses; options..., env=Subst())
+        if vsat
+            outcomes_list = unroll_list_term(vsubst[1][Var(:Vs)])
+            print(outcomes_list)
+
+            psat, psubst = resolve(Term[Compound(:set_sw,[msw_id,Var(:Ps)])], clauses; options..., env=Subst())
+            if psat
+                probs_list = unroll_list_term(psubst[1][Var(:Ps)])
+            else
+                probs_list = [ 1/length(outcomes_list) for _ in outcomes_list ]
+            end
+            unifier = unify(msw(outcomes_list,probs_list), msw_outcome, occurs_check, funcs)
+            if isnothing(unifier) return false end
+            compose!(goal.env, unifier) # Update variable bindings if satisfied
+        else
+            return false
+        end
         return true
     elseif term.name in comp_ops || term.name in keys(funcs)
         result = eval_term(term, goal.env, funcs)

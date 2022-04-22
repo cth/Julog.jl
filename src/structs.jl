@@ -72,6 +72,15 @@ function Base.show(io::IO, t::Var)
     (t.name isa UInt) ? print(io, "#", t.name) : print(io, t.name)
 end
 
+function unroll_list_term(lt)
+    elems = []
+    while(lt.name != :cend)
+        push!(elems, lt.args[1])
+        lt = lt.args[2]
+    end
+    return elems
+end
+
 function Base.show(io::IO, t::Compound)
     if t.name == :cons && length(t.args) == 2
         # Handle lists separately
