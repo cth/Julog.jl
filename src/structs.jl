@@ -46,10 +46,18 @@ Base.hash(t::Var, h::UInt) = hash(t.name, h)
 Base.hash(t::Compound, h::UInt) = isempty(t.args) ?
     hash(t.name, h) : hash(t.name, hash(Tuple(t.args), h))
 
+"Make a shallow copy of a term."
+Base.copy(t::Const) = Const(t.name)
+Base.copy(t::Var) = Var(t.name)
+Base.copy(t::Compound) = Compound(t.name, t.args)
+
 "Check if two clauses are exactly equal."
 Base.:(==)(c1::Clause, c2::Clause) =
     (c1.head == c2.head && length(c1.body) == length(c2.body) &&
      all(t1 == t2 for (t1, t2) in zip(c1.body, c2.body)))
+
+"Make a shallow copy of a clause."
+Base.copy(c::Clause) = Clause(c.head, c.body)
 
 "Compute hash of Julog clause from head and body."
 Base.hash(c::Clause, h::UInt) = hash(c.head, hash(Tuple(c.body), h))

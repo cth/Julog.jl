@@ -304,29 +304,53 @@ function handle_builtins!(queue, clauses, goal, term; options...)
         compose!(goal.env, unifier) # Update variable bindings if satisfied
         return true
     elseif term.name == :msw
-        msw_id, msw_outcome = term.args
-        msw_id = substitute(msw_id,goal.env) # msw_id needs to be a ground term
-
-        # First see if there is a matching fact on the form:
-        # values(pattern,[outcome_1,...,outcome_n],[prob_1,...,prob_n])
-        vsat, vsubst = resolve(Term[Compound(:values,[msw_id,Var(:Vs)])], clauses; options..., env=Subst())
-        if vsat
-            outcomes_list = unroll_list_term(vsubst[1][Var(:Vs)])
-            print(outcomes_list)
-
-            psat, psubst = resolve(Term[Compound(:set_sw,[msw_id,Var(:Ps)])], clauses; options..., env=Subst())
-            if psat
-                probs_list = unroll_list_term(psubst[1][Var(:Ps)])
-            else
-                probs_list = [ 1/length(outcomes_list) for _ in outcomes_list ]
-            end
-            unifier = unify(msw(outcomes_list,probs_list), msw_outcome, occurs_check, funcs)
-            if isnothing(unifier) return false end
-            compose!(goal.env, unifier) # Update variable bindings if satisfied
+        if length(term.args) == 2
+            msw_id, msw_outcome = term.args
+            msw_prob = nothing
+        elseif length(term.args) == 3
+            msw_id, msw_outcome, msw_prob = term.args
         else
+            @debug "Wrong number of args"
             return false
         end
-        return true
+        msw_id = substitute(msw_id,goal.env) # msw_id needs to be a ground term
+
+        # Find (resolve) a matching fact/rule on the form:
+        #   values(MSW_ID,[outcome_1,...,outcome_n],[prob_1,...,prob_n]) <<= ...,
+        # where MSW_ID matches the first msw argument.
+        vsat, vsubst = resolve(Term[Compound(:values,[msw_id,Var(:Vs)])], clauses; options..., env=Subst())
+
+        if vsat
+            # Try to resolve a set_sw fact/rule matching MSW_ID - if resolved ,then use its
+            # second argument to define the the probability distribution of outcomes
+            outcomes = unroll_list_term(vsubst[1][Var(:Vs)])
+            psat, psubst = resolve(Term[Compound(:set_sw,[msw_id,Var(:Ps)])], clauses; options..., env=Subst())
+            if psat
+                outcome_probs = unroll_list_term(psubst[1][Var(:Ps)])
+                outcome_probs = Vector{Float64}([ convert(Float64,x.name) for x in outcome_probs ])
+                @assert length(outcome_probs)==length(outcomes)
+            else
+                outcome_probs = [ 1/length(outcomes) for _ in outcomes ]
+            end
+
+            selected_outcome = msw(outcomes,outcome_probs)
+
+            # Unify outcome
+            unifier = unify(selected_outcome, msw_outcome, occurs_check, funcs)
+            if isnothing(unifier) return false end
+            compose!(goal.env, unifier) # Update variable bindings if satisfied
+
+            # Unify probability
+            if msw_prob != nothing
+                p = outcome_probs[findfirst((x->x==selected_outcome),outcomes)]
+                unifier = unify(Const(p), msw_prob, occurs_check, funcs)
+                if isnothing(unifier) return false end
+                compose!(goal.env, unifier) # Update variable bindings if satisfied
+            end
+
+            return true
+        end
+        return false
     elseif term.name in comp_ops || term.name in keys(funcs)
         result = eval_term(term, goal.env, funcs)
         return (isa(result, Const) && result.name == true)
